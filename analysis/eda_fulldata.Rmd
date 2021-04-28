@@ -1,0 +1,126 @@
+---
+title: "Exploratory data analysis of full data"
+author: "Riccardo Fogliato"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{EDA of full data}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(rmarkdown.html_vignette.check_title = FALSE)
+```
+
+## Setup: packages and data
+
+```{r load_packages, include=FALSE}
+library(tidyverse)
+library(vroom)
+library(here)
+library(xtable)
+library(knitr)
+library(kableExtra)
+
+source(here('analysis', 'utils.R'))
+```
+
+```{r load_data, include = TRUE, warning = FALSE}
+admin_batch <- vroom(here('data', 'admin_batch.csv'),
+                     col_types = cols())
+offense <- vroom(here('data', 'offense.csv'),
+                 col_types = cols())
+```
+
+```{r subset_data_offense, include = TRUE, warning = FALSE}
+# subset offenses of interest
+offense_sub <- offense %>% 
+  distinct(year, incident_number, 
+           ucr_offense_code, originating_agency_identifier) %>% 
+  filter(grepl('13A|13B|Aggravated|Simple|Murder|09A|11A|Forcible Rape|Robbery|120|(13A)|(13B)|(120)|(09A)|(11A)',
+               ucr_offense_code))
+
+# rename offenses
+offense_sub <- offense_sub %>%
+  mutate(offense = case_when(
+    grepl('09A|Murder', ucr_offense_code) ~ '09A',
+    grepl('13A|Aggravated', ucr_offense_code) ~ '13A',
+    grepl('13B|Simple', ucr_offense_code) ~ '13B',
+    grepl('120|Robbery|120', ucr_offense_code) ~ '120',
+    grepl('11A|Forcible', ucr_offense_code) ~ '11A'))
+```
+
+
+```{r subset_states, include = TRUE, warning = FALSE}
+# subset states of interest
+states <- 'AR|CO|DE|ID|IA|KY|MI|MT|NH|ND|SC|SD|TN|VT|VA|WV'
+admin_batch <- admin_batch %>% filter(grepl(states, state_abbv))
+```
+
+
+```{r create_df, include = TRUE, warning = FALSE}
+# join data
+df <- admin_batch %>% 
+  distinct(year, incident_number, 
+           cleared_exceptionally, originating_agency_identifier, 
+           total_arrestee_segments) %>%
+  inner_join(offense_sub, 
+             by = c("originating_agency_identifier", "incident_number", "year"))
+```
+
+## Goal
+In this file, we look at clearance and arrest rates for all incidents with at 
+least one violent offense. 
+
+
+## Analysis
+
+First, let's compute the yearly number of offenses.
+```{r crimes_year, warning = FALSE}
+# number of crimes per year
+df %>% count(offense, year) %>% sable()
+```
+
+We now look at the number of incidents and clearance rates (i.e., incidents that include at least an exceptional clearance or one arrest).
+```{r clearance_rate, warning = FALSE}
+# compute arrest rates (with and without exceptional clearance)
+n_per_offense <- df %>% group_by(offense) %>% summarise(n = n()) %>%
+  pivot_wider(names_from = offense, values_from = n)
+clearance_rate <- df %>% group_by(offense) %>% 
+  summarise(arrest_rate = round(mean(ifelse(total_arrestee_segments > 0 | 
+                      cleared_exceptionally != 'not applicable', 1, 0)),2)) %>%
+  pivot_wider(names_from = offense, values_from = arrest_rate)
+
+summary_stats <- n_per_offense %>%
+      bind_rows(clearance_rate)
+summary_stats %>% sable()
+```
+
+
+```{r clearance_rate_save, include = FALSE, warning = FALSE}
+summary_stats %>%
+  xtable(., type = "latex")
+```
+
+
+Let's compute the share of incidents that result in at least one arrest.
+But let's first drop those that are cleared by exceptional means.
+```{r arrest_rate, warning = FALSE}
+n_per_offense_wo_excep <- df %>% filter(cleared_exceptionally == 'not applicable') %>% 
+  group_by(offense) %>% summarise(n = n()) %>% 
+  pivot_wider(names_from = offense, values_from = n)
+arrest_rate <- df %>% filter(cleared_exceptionally == 'not applicable') %>% 
+  group_by(offense) %>% summarise(arrest_rate = round(mean(mean(total_arrestee_segments>0)),2)) %>%
+    pivot_wider(names_from = offense, values_from = arrest_rate)
+
+summary_stats <- n_per_offense %>%
+      bind_rows(arrest_rate)
+summary_stats %>% sable()
+```
+
+```{r arrest_rate_save, include = FALSE}
+#summary_stats %>%
+#  xtable(., type = "latex")
+```
+

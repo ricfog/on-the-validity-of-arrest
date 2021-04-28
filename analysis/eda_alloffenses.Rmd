@@ -1,0 +1,270 @@
+---
+title: "Exploratory data analysis of all offenses"
+author: "Riccardo Fogliato"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{EDA of all offenses}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(rmarkdown.html_vignette.check_title = FALSE)
+```
+
+## Setup: packages and data
+
+```{r load_packages, include=FALSE,  warning = FALSE, message = FALSE}
+library(tidyverse)
+library(vroom)
+library(here)
+library(knitr)
+library(kableExtra)
+library(xtable)
+
+source(here('analysis', 'utils.R'))
+```
+
+
+Load the data.
+```{r load_data, warning = FALSE, message = FALSE}
+files <- list.files(here('data'))
+files <- files[grepl('data_', files) & !grepl('imputed', files)]
+# load files
+df <- map(files, ~ vroom(here('data', .), col_types = cols())) %>%
+  setNames(str_replace(word(files, 2, sep = "_"), '.csv', ''))
+df <- df %>% bind_rows(.id = 'offense')
+```
+
+## Goal
+
+In this file, we first analyze the reasons behind exceptional clearance and then focus our attention on arrest rates by racial group of offenders/victims. 
+
+## Analysis of exceptional clearance
+
+Let's first look at the shares of exceptional clearance conditioning on the offender's race. 
+```{r exceptional_clearance_off, warning = FALSE, message = FALSE}
+offense_names <- c('09A', '11A', '120', '13A', '13B')
+cleared_excep_offender <- as.list(offense_names) %>%
+  setNames(offense_names) %>%
+  map(~ filter(df, offense == .) %>%
+  mutate(cleared_excep = ifelse(cleared_exceptionally=='not applicable', 'no', 'yes')) %>% 
+  group_by(race_of_offender) %>% 
+  summarise(`Nb offenses` = n(),
+            `Nb exceptionally cleared` = sum(cleared_excep=='yes'),
+            `% exceptionally cleared` = round(mean(cleared_excep=='yes'),2)))
+
+cleared_excep_offender_wide <- cleared_excep_offender %>%
+     imap(~ tibble(`white offenders` = t(.x[1,-1])[,1], 
+       `black offenders` = t(.x[2,-1])[,1]) %>%
+         setNames(paste0(.y, c('Black', 'White')))) %>%
+  bind_cols()
+
+
+cleared_excep_offender_wide %>%
+  bind_cols(tibble(Variable = colnames(cleared_excep_offender$`09A`)[-1])) %>%
+  relocate(Variable) %>%
+  sable()
+```
+
+Let's look at the reasons behind the clearance. Again, we condition on the offender's race. 
+```{r exceptional_clearance_off_reasons, warning = FALSE, message = FALSE}
+
+reasons_behind_clearance_off <- offense_names %>% 
+  map(~ filter(df, offense == .) %>%
+  group_by(race_of_offender, cleared_exceptionally) %>% 
+  summarise(`Nb offenses` = n()) %>% 
+  mutate(`% offenses` = round(`Nb offenses`/sum(`Nb offenses`),2))) #%>%
+  #filter(cleared_exceptionally != 'not applicable')
+
+reasons_behind_clearance_off_wide <- 
+  map2(reasons_behind_clearance_off, offense_names,
+     ~ .x %>% select(-`Nb offenses`) %>%
+  pivot_wider(names_from = race_of_offender, values_from = `% offenses`) %>%
+  filter(grepl('death|prosecution|victim', cleared_exceptionally)) %>%
+    setNames(c('Reason', paste0(.y, c('Black', 'White'))))
+  ) %>%
+  reduce(left_join, by = "Reason")
+
+
+reasons_behind_clearance_off_wide %>%
+    sable()
+```
+
+
+```{r excep_clear_off_save, include = FALSE}
+cleared_excep_offender_wide %>%
+  add_column(Variable = colnames(cleared_excep_offender$`09A`)[-1]) %>%
+  bind_rows(reasons_behind_clearance_off_wide %>% rename(Variable = Reason)) %>%
+  relocate(Variable) %>%
+  xtable(., type = "latex") %>%
+  print(., include.rownames=FALSE)
+```
+
+
+Let's repeat exactly the same analysis but now conditioning on the victim's race. 
+
+```{r exceptional_clearance_vic, warning = FALSE, message = FALSE}
+
+cleared_excep_victim <- as.list(offense_names) %>%
+  setNames(offense_names) %>%
+  map(~ filter(df, offense == .) %>%
+  mutate(cleared_excep = ifelse(cleared_exceptionally=='not applicable', 'no', 'yes')) %>% 
+  group_by(race_of_victim) %>% 
+  summarise(`Nb offenses` = n(),
+            `Nb exceptionally cleared` = sum(cleared_excep=='yes'),
+            `% exceptionally cleared` = round(mean(cleared_excep=='yes'),2)))
+
+cleared_excep_victim_wide <- cleared_excep_victim %>%
+     imap(~ tibble(`white victims` = t(.x[1,-1])[,1], 
+       `black victims` = t(.x[2,-1])[,1]) %>%
+         setNames(paste0(.y, c('Black', 'White')))) %>%
+  bind_cols()
+
+
+cleared_excep_victim_wide %>%
+  bind_cols(tibble(Variable = colnames(cleared_excep_victim$`09A`)[-1])) %>%
+  relocate(Variable) %>%
+  sable()
+```
+
+```{r exceptional_clearance_vic_reasons, warning = FALSE, message = FALSE}
+
+reasons_behind_clearance_vic <- offense_names %>% 
+  map(~ filter(df, offense == .) %>%
+  group_by(race_of_victim, cleared_exceptionally) %>% 
+  summarise(`Nb offenses` = n()) %>% 
+  mutate(`% offenses` = round(`Nb offenses`/sum(`Nb offenses`),2))) #%>%
+  #filter(cleared_exceptionally != 'not applicable')
+
+reasons_behind_clearance_vic_wide <- 
+  map2(reasons_behind_clearance_vic, offense_names,
+     ~ .x %>% select(-`Nb offenses`) %>%
+  pivot_wider(names_from = race_of_victim, values_from = `% offenses`) %>%
+  filter(grepl('death|prosecution|victim', cleared_exceptionally)) %>%
+    setNames(c('Reason', paste0(.y, c('Black', 'White'))))
+  ) %>%
+  reduce(left_join, by = "Reason")
+
+
+reasons_behind_clearance_vic_wide %>%
+    sable()
+```
+
+```{r excep_clear_vic_save, include = FALSE}
+cleared_excep_victim_wide %>%
+  add_column(Variable = colnames(cleared_excep_victim$`09A`)[-1]) %>%
+  bind_rows(reasons_behind_clearance_vic_wide %>% rename(Variable = Reason)) %>%
+  relocate(Variable) %>%
+  xtable(., type = "latex")
+```
+
+
+
+## Analysis of arrests by racial group
+
+Consider only incidents that have not been cleared by exceptional means.
+```{r exclude_excep, warning = FALSE, message = FALSE}
+df <- df %>% filter(cleared_exceptionally == "not applicable")
+mean(df$race_of_offender == 'Black')
+mean(df$race_of_victim == 'Black')
+df %>% group_by(race_of_offender) %>% summarise(arrest_rate = mean(y))
+```
+
+```{r arrest_statistics, warning = FALSE, message = FALSE}
+
+summary_stats_crime <- offense_names %>% 
+  map(~ filter(df, offense == .) %>%
+  group_by(race_of_offender) %>% 
+  summarise(
+            `Nb offenders` = n(), 
+            `% intra-racial crime` = round(mean(.data$race_of_offender == .data$race_of_victim),2),
+            `Arrest rate` = round(mean(y),2), 
+            `Arrest rate (intraracial)` = round(mean(y[.data$race_of_victim==.data$race_of_offender]),2),
+            `Arrest rate (interracial)` = round(mean(y[.data$race_of_victim!=.data$race_of_offender]),2)
+            ) %>%
+    mutate(`% offenders` = round(`Nb offenders`/sum(`Nb offenders`),2)))
+
+summary_stats_crime_wide <- map2(summary_stats_crime, offense_names,
+     ~ tibble(`white offenders` = t(.x[1,-1]), 
+       `black offenders` = t(.x[2,-1])) %>%
+       setNames(paste0(.y,c('Black', 'White')))) %>%
+  bind_cols()
+
+
+(summary_stats_crime_wide %>%
+  add_column(Variable = colnames(summary_stats_crime[[1]])[-1]) %>% 
+   relocate(Variable))[c(1,6,2:5),] %>%
+    sable()
+```
+
+```{r arrest_rate_save, include = FALSE}
+(summary_stats_crime_wide %>%
+  add_column(Variable = colnames(summary_stats_crime[[1]])[-1]) %>% 
+   relocate(Variable))[c(1,6,2:5),] %>%
+    xtable(., type = "latex")
+```
+
+
+```{r summary}
+# summary statistics on incidents
+df %>% count(year) %>% summarise(mean(n), sd(n))
+df %>% group_by(offense) %>% summarise(n())
+df %>% count(race_of_offender) %>% mutate(prop = round(n/sum(n),2)) 
+df %>% count(race_of_victim) %>% mutate(prop = round(n/sum(n),2)) 
+df %>% group_by(offense, race_of_offender) %>% summarise(n = n()) %>% mutate(prop = paste0(round(n/sum(n),2)*100, '%')) %>% select(-prop) %>% unite('or', offense:race_of_offender) %>% 
+  pivot_wider(names_from = or, values_from = n) %>% xtable(digits=0)
+
+```
+
+
+
+```{r race_arrest_plot, warning = FALSE, message = FALSE, fig.width = 7}
+
+p <- df %>%
+  group_by(offense, race_of_offender, race_of_victim, y) %>%
+  summarise(n = n())  %>%
+  mutate(prop = round(n/sum(n),2)) %>%
+  ungroup() %>%
+  rowwise() %>% mutate(offense = rename_offenses(offense)) %>% ungroup %>%
+  mutate(offense = ifelse(grepl('Murder', offense), 'Murder/n.n.-mansl.', offense)) %>%
+  filter(y == 1) %>%
+  mutate(prop_char = paste0(prop*100, '%')) %>%
+  #mutate(sd = round(sqrt(prop*(1-prop)/n),2)) %>%
+  #mutate(prop_sd = paste0(prop, ' (', sd, ')')) %>%
+  mutate(race_of_victim = ifelse(race_of_victim == 'White',
+                                 'vic. white', 'vic. black'),
+         race_of_offender = ifelse(race_of_offender == 'Black', 
+                                   'off. black', 'off. white')) %>%
+  rename(`Race of victim` = race_of_victim,
+         `Race of offender` = race_of_offender) %>%
+  ggplot(aes(`Race of offender`, `Race of victim`, fill = prop)) + 
+  geom_tile() + 
+  facet_wrap(~ factor(offense, 
+                      levels = c('Murder/n.n.-mansl.', 'Forcible rape', 
+                                 'Robbery', 'Aggravated assault', 
+                                 'Simple assault')), ncol = 5)
+
+p <- p +
+  theme_bw() + 
+  xlab('') + 
+  ylab('') + 
+  scale_fill_gradient(low = "white", high = "darkred", limits = c(0.15,0.75)) + 
+  theme(legend.position = 'none', 
+        axis.text.y = element_text(angle = 90, hjust = 0.5, size = 20), 
+        axis.text.x = element_text(size = 20),
+        plot.title = element_text(hjust = 0.5, size = 25),
+        strip.text.x = element_text(size = 20)) +
+  geom_text(aes(label = prop_char), col = 'black', size = 15)
+p
+```
+
+```{r race_arrest_plot_save, include = FALSE, warning = FALSE, message = FALSE}
+p
+ggsave(width = 20, height = 5, here('figures',paste0('Arrest_rate_by_race_comb.pdf')))
+```
+
+
+
+

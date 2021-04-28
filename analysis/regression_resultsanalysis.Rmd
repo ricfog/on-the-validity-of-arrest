@@ -1,0 +1,160 @@
+---
+title: "Analysis of regression results"
+author: "Riccardo Fogliato"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Analysis of regression results}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Setup: packages and data
+
+```{r load_packages, include=FALSE,  warning = FALSE, message = FALSE}
+library(tidyverse)
+library(vroom)
+library(here)
+library(gridExtra)
+library(knitr)
+library(kableExtra)
+library(glue)
+library(xtable)
+
+source(here('analysis', 'utils.R'))
+```
+
+
+```{r get_estimates, message = FALSE, warning = FALSE}
+# look at available files
+files <- list.files(here("analysis", 'regression-results'))
+files <- files[grepl('logreg', files)]
+
+files_original <- files[grepl('original', files)]
+est <- files_original %>% 
+  map(~vroom(here('analysis', 'regression-results', .), 
+                            col_types = cols())) %>%
+  setNames(substr(files_original, start=5, stop=7)) %>%
+  bind_rows(.id = 'offense')
+
+# estimates under reweighting
+files_rwgt <- files[grepl('reweighting', files)]
+est_rwgt <- files_rwgt %>% 
+  map(~vroom(here('analysis', 'regression-results', .), 
+                            col_types = cols())) %>%
+  setNames(substr(files_rwgt, start=5, stop=7)) %>%
+  bind_rows(.id = 'offense')
+```
+
+
+## Analysis
+
+We first analyse the estimates of the regression coefficients.
+```{r compute_summary_stats, warning=FALSE, message=FALSE}
+
+# get standard deviation of term's estimates
+get_stderror_estimates <- function(estimates, std.errors){
+  variances <- std.errors^2
+  wvar <- mean(variances)
+  bvar <- var(estimates)
+  tvar <- wvar + bvar * (1 + 1/length(estimates))
+  sqrt(tvar)
+}
+
+# for this use normal approximation
+# alternatively look at (Rubin, 1987) page 77
+get_p_value <- function(estimate, std.error){
+  2 * (1-sapply(abs(estimate/std.error), stats::pnorm))
+}
+
+summary_models <- est %>%
+  group_by(offense, term) %>%
+  summarise(std.error = get_stderror_estimates(estimate, std.error.sand), # use sandwich standard errors
+            estimate = mean(estimate)) %>%
+  mutate(p.value = get_p_value(estimate, std.error))
+            
+summary_models %>%
+  filter(!is.na(estimate)) %>%
+  select(offense, term, estimate, std.error, p.value) %>%
+  sable()
+```
+
+
+```{r table_coef_for_paper, include = FALSE}
+coefs_tab <- summary_models %>%
+  filter(!is.na(estimate)) %>%
+  to2char() %>% 
+  reorder_and_filter_rows() %>% 
+  pivot_wider(names_from = offense, values_from = estimate) %>%
+  select(term, matches('murder'), matches('rape'), matches('robbery'), matches('aggravated'), matches('simple'))
+print(xtable(reorder_and_filter_rows(coefs_tab), 
+             align = c('l', 'l', rep('c', ncol(coefs_tab) -1))),
+      include.rownames = FALSE,
+      booktabs = TRUE,
+      sanitize.text.function=function(x){x})
+```
+
+
+### Model diagnostics
+
+Get the focal slope model diagnostics.
+```{r model_diag, warning=FALSE, message=FALSE}
+
+get_focal_slope <- function(est_rwgt, term_chosen, offense_chosen){
+   mean_estimates <- est_rwgt %>% filter(term == term_chosen & offense == offense_chosen) %>% 
+    rowwise() %>% mutate(term_rwgt = rename_vars(term_rwgt)) %>% ungroup %>% 
+    group_by(offense, term_rwgt, center) %>% summarise(mean_boot = mean(estimate))
+  est_rwgt %>%
+    filter(term == term_chosen & offense == offense_chosen) %>%
+    rowwise() %>% mutate(term_rwgt = rename_vars(term_rwgt)) %>% ungroup %>%
+    ggplot(aes(center, estimate)) +
+    geom_point(alpha = 0.8, col='grey') + theme_bw() +
+    geom_point(data=mean_estimates, aes(center, mean_boot), shape = 15) +
+    facet_wrap(~ factor(term_rwgt, levels = order_terms), ncol = 6, scale = 'free_x') + 
+    ylim(-0.5,0.5) +
+    #ylim(-1,1) +
+    geom_hline(data=h_line, aes(yintercept = 0), linetype = 'dashed', col = 'blue', alpha = 0.3) + 
+    ylab(paste("Coef. of offender's race (white=1)")) + xlab("Value of group's center") + 
+    ggtitle(paste0("Focal slope diagnostics for ", tolower(rename_offenses(offense_chosen)))) + 
+    theme(plot.title = element_text(size=20), axis.title = element_text(size=15))
+}
+ 
+ 
+# order terms in the plot
+order_terms <- intersect(c( 
+  'is_victim_male', 'is_victim_white', 'age_of_victim', 
+  'is_offender_male', 'age_of_offender',
+  'is_offender_stranger', 'is_minor_injury', 'is_serious_injury',
+  'is_multiple_offense',
+  'frac_black_off', 'officer_per_1000capita', 'offense_per_1000capita'), 
+  est_rwgt$term_rwgt) %>% sapply(., rename_vars)
+
+# horizontal line at 0
+h_line <- tibble(term_rwgt = order_terms, estimate = 0)
+term_chosen <- 'is_offender_white'
+
+# save plots in list
+offense_names <- c('09A', '11A', '120', '13A', '13B')
+p_list <- offense_names %>%
+  purrr::map(~ get_focal_slope(est_rwgt, 'is_offender_white', .x)) %>%
+  setNames(offense_names)
+```
+
+
+Plot the diagnostics.
+```{r show_focal_slope, warning = FALSE, message = FALSE, fig.height = 14, fig.width=9}
+grid.arrange(p_list$`11A`, p_list$`120`, p_list$`13A`, p_list$`13B`, ncol = 1)
+```
+
+
+
+```{r show_focal_slope_save, include = FALSE, warning = FALSE, message = FALSE}
+
+purrr::walk2(p_list, as.list(names(p_list)), 
+            ~ ggsave(height = 4, width = 13, plot = .x, filename = here('figures', paste0('Focalslope_', .y, '.pdf'))))
+
+```
+

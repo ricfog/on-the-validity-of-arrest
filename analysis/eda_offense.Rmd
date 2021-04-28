@@ -1,0 +1,394 @@
+---
+title: "Exploratory data analysis of data by offense type"
+author: "Riccardo Fogliato"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{EDA by offense type}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+params:
+  offense: '13B'
+---
+
+```{r include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(rmarkdown.html_vignette.check_title = FALSE)
+```
+
+## Setup: packages and data
+
+```{r load_packages, include=FALSE,  warning = FALSE, message = FALSE}
+library(tidyverse)
+library(vroom)
+library(here)
+library(knitr)
+library(kableExtra)
+library(xtable)
+library(quantreg)
+library(broom)
+
+source(here('analysis', 'utils.R'))
+```
+
+
+```{r setup_plots, include = FALSE}
+list_states <- get_country_div_and_state()
+states_order <- list_states$states_order
+country_div_order <- list_states$country_div_order
+states_order <- rev(states_order); country_div_order <- rev(country_div_order)
+country_list_color <- sapply(country_div_order, get_color_division)
+levels_pop_group <- c("Cities < 2,500" , "Cities 2,500-9,999", "Cities 10,000-24,999", 
+                      "Cities 25,000-49,999", "Cities 50,000-99,999", 
+                      "Cities 100,000-249,999", 
+                      "Cities 250,000-499,999","Cities 500,000-999,999", 
+                      "MSA Counties < 10,000", "MSA Counties 10,000-24,999", 
+                      "MSA Counties 25,000-99,999",
+                      "MSA Counties 100,000+","MSA State Police" , 
+                      "Non-MSA Counties < 10,000" , "Non-MSA Counties 10,000-24,999", 
+                      "Non-MSA Counties 25,000-99,999", "Non-MSA Counties 100,000+", 
+                      "Non-MSA State Police")
+```
+
+
+```{r, include = FALSE, eval = FALSE}
+# if you run this from rstudio, then you should run this line
+offense <- '13B'
+```
+
+```{r, include = FALSE}
+offense <- params$offense
+```
+
+
+The offense in this report is `offense`.
+```{r load_data, include = TRUE,  warning = FALSE}
+df <- vroom(here('data', paste0('data_', offense, '.csv')),
+            col_types = cols())
+```
+
+```{r rename_again_murder, include = FALSE}
+offense <- rename_offenses(offense); offense
+offense <- ifelse(offense == "Murder/non-negligent manslaughter", 'Murder non-negligent manslaughter', offense)
+```
+
+
+## Goal 
+
+In this analysis, we focus the rest of the analysis of variations in arrest rates across jurisdictions. 
+Again, this analysis is relative to ``offense``.
+
+
+## Analysis
+
+Consider only incidents that have not been cleared by exceptional means.
+```{r exclude_excep, include = TRUE,  warning = FALSE, message = FALSE}
+df <- df %>% filter(cleared_exceptionally == "not applicable")
+```
+
+```{r check_race_dist, include = FALSE, warning = FALSE, message = FALSE}
+df %>% count(race_of_offender) %>% mutate(prop = n/sum(n))
+df %>% group_by(race_of_offender, race_of_victim) %>% summarise(n = n()) %>% mutate(prop = n/sum(n))
+```
+
+Get the overall arrest rate (y=1 means that an arrest happened).
+```{r arrest_rate_race,  warning = FALSE, message = FALSE}
+df %>% group_by(race_of_offender) %>% 
+  summarise(n_offenses = n(), 
+            arrest_rate = round(mean(y),2)) %>%
+  sable()
+```
+
+
+
+Let's look at the arrest rate across states. 
+```{r arrest_rate_by_state,  warning = FALSE, message = FALSE}
+arrest_by_state <- df %>% 
+  group_by(state_abbv) %>% 
+  summarise(
+    `Arrest rate` = round(mean(y),2),
+    `Arrest rate white-black` = round(mean(y[race_of_offender=='White'])-mean(y[race_of_offender=='Black']),2), 
+    `Nb black offenders` = sum(race_of_offender=='Black'), 
+    `Nb white offenders` = sum(race_of_offender=='White'))
+
+arrest_by_state %>%
+    sable()
+```
+
+Let's compute the mean and standard deviation of the difference in arrest rates of white-black across states.
+```{r arrest_rate_by_state_std.dev,  warning = FALSE, message = FALSE}
+arrest_by_state %>%
+  summarise(
+    `Mean diff. in arrest rates white-black` = round(mean(`Arrest rate white-black`), 2),
+    `Standard deviation of diff. in arrest rates white-black` = round(sd(`Arrest rate white-black`), 2)) %>%
+      sable()
+```
+
+Let's also plot these differences. 
+```{r arrest_rate_by_state_plot, include = TRUE,  warning = FALSE, fig.height = 7, fig.width = 7}
+p <- df %>%
+  group_by(state_abbv, race_of_offender) %>%
+  summarise(y_mean = mean(y), std.err = sd(y)/sqrt(n()), n = n()) %>%
+  filter(n > 50) %>%
+  ggplot(aes(factor(state_abbv, levels=states_order), y_mean, 
+             fill = race_of_offender)) + 
+  geom_col(position = position_dodge()) + 
+  geom_errorbar(aes(ymin = y_mean-1.96*std.err, ymax = y_mean+1.96*std.err), 
+                width = 0.2, position=position_dodge(.9)) +
+  xlab('State code') +  ylab('Arrest rate') + theme_bw() +
+  scale_fill_manual('Race of offender', values = c('grey60', "#E69F00")) + 
+  theme(axis.text.x = 
+          element_text(colour = country_list_color)) + 
+  ylim(0,1) + 
+  ggtitle(paste0('Arrest rates for ', tolower(offense)))
+p
+```
+
+
+```{r arrest_rate_by_state_plot_save, include = FALSE,  warning = FALSE}
+p <- p  +
+  theme(plot.title = element_text(size=40), axis.title = element_text(size=30), 
+        axis.text = element_text(size = 20), legend.text = element_text(size=20),
+        legend.title = element_text(size = 20))
+ggsave(width = 14, height = 10, 
+       here('figures', paste0('Arrest_rate_by_state_', offense, '.pdf')))
+```
+
+
+## Focus on TN, MI, SC
+
+Given the large differences in arrest rates observed in Tennesse, Michigan, and South Carolina, let's focus on these states.
+
+Let's keep only incidents from these states. 
+```{r subset_states_high,  warning = FALSE, message = FALSE}
+df_state <- df %>% filter(grepl('SC|MI|TN', state_abbv))
+```
+
+```{r rename_nashville, include = FALSE}
+df_state <- df_state %>%
+  mutate(city_name = ifelse(city_name == 'NASHVILLE METROPOLITAN', 'NASHVILLE', city_name))
+```
+
+
+Let's first look at Tennessee and Michigan, which both contain cities with > 500k citizens as recorded in the data.
+We now compute the arrest rates in those cities vs the rest. 
+```{r states_high_arrest_rate,  warning = FALSE, message = FALSE}
+df_state %>% filter(grepl('MI|TN', state_abbv)) %>% 
+  # SC does not have cities > 500k
+  mutate(`Large city` = ifelse(population_group == 'Cities 500,000-999,999', city_name, 'No')) %>%
+  group_by(state_abbv, `Large city`) %>% 
+  summarise(
+            `Number of offenses` = n(),
+            `Arrest rate` = round(mean(y),2) ,
+            `Arrest rate black` = round(mean(y[race_of_offender == "Black"]),2),
+            `Arrest rate white` = round(mean(y[race_of_offender == "White"]),2),
+            `Diff. arrest rate white-black` = round(mean(y[race_of_offender=='White'])-mean(y[race_of_offender=='Black']),2),
+            `% of offenders that is black in city` = round(mean(race_of_offender=='Black'),2)) %>%
+        sable()
+```
+
+
+Given the large differences in the arrest rates across cities, we check whether the distribution of the population in large cities vs. other areas can explain the overall gap.
+```{r distribution_offenders_cities, warning = FALSE, message = FALSE}
+df_state %>% filter(grepl('MI|TN', state_abbv)) %>% 
+  mutate(`Large city` = ifelse(population_group == 'Cities 500,000-999,999', city_name, 'No')) %>%
+  group_by(state_abbv, race_of_offender, `Large city`) %>%
+  summarise(`Number of offenders` = n()) %>%
+  mutate(`% of offenders` = round(`Number of offenders`/sum(`Number of offenders`),2)) %>%
+  sable()
+```
+
+
+We now investigate the variation in arrest rates across core cities.
+```{r core_city_arrest_rate, warning = FALSE, message = FALSE}
+core_city_arrest_rate <- df_state %>%
+  filter(core_city == 'Yes') %>%
+  group_by(state_abbv, city_name) %>% 
+  summarise(
+            `Number of offenses` = n(),
+            `Arrest rate` = round(mean(y),2) ,
+            `Arrest rate black` = round(mean(y[race_of_offender == "Black"]),2),
+            `Arrest rate white` = round(mean(y[race_of_offender == "White"]),2),
+            `Diff. arrest rate white-black` = round(mean(y[race_of_offender=='White'])-mean(y[race_of_offender=='Black']),2),
+            `% of offenders that is black in city` = round(mean(race_of_offender=='Black'),2))
+
+core_city_arrest_rate %>%
+        sable()
+```
+
+We then check whether arrest rates are lower in core cities compared to the rest of the state. 
+```{r arrest_rate_core_vs_rest, warning = FALSE, message = FALSE}
+df_state %>%
+  group_by(state_abbv, core_city) %>% 
+  summarise(
+            `Number of offenses` = n(),
+            `Arrest rate` = round(mean(y),2) ,
+            `Arrest rate black` = round(mean(y[race_of_offender == "Black"]),2),
+            `Arrest rate white` = round(mean(y[race_of_offender == "White"]),2),
+            `Diff. arrest rate white-black` = round(mean(y[race_of_offender=='White'])-mean(y[race_of_offender=='Black']),2),
+            `% of offenders that is black in city` = round(mean(race_of_offender=='Black'),2)) %>%
+  sable()
+```
+
+
+## Analysis of arrest rates across police agencies (ORIs)
+
+We first create summary statistics for each police agency. 
+```{r get_ori_stats, warning = FALSE, message = FALSE}
+
+ori_stats <- df %>%
+  group_by(originating_agency_identifier) %>%
+  summarise(
+    `Nb offenses` = n(),
+    `Arrest rate` = mean(y),
+  `Diff. arrest rate white-black` = sum(y==1 & race_of_offender=='White')/sum(race_of_offender=='White')-sum(y==1 & race_of_offender=='Black')/sum(race_of_offender=='Black'),
+    `Arrest rate black` = sum(y==1 & race_of_offender=='Black')/sum(race_of_offender=='Black'),
+    `Arrest rate white` = sum(y==1 & race_of_offender=='White')/sum(race_of_offender=='White'),
+    `Nb black offenders` = sum(race_of_offender=='Black'),
+    `Nb white offenders` = sum(race_of_offender=='White'),
+    `% offenders that is black` = sum(race_of_offender=='Black')/n(),
+    # population served & officers characteristics
+    `Population served` = mean(population_leoka, na.rm=T),
+    `Officer rate` = mean(officer_rate, na.rm=T),
+    `Population group` = population_group[1],
+    `State` = state_abbv[1],
+    `Total officers` = mean(total_off, na.rm=T),
+    `Core city` = mean(core_city=='Yes'),
+  `Crime per capita` = n()/`Population served`
+  )
+glimpse(ori_stats)
+```
+
+Importantly, we keep only agencies with at least 100 crimes recorded in the period considered (i.e., on average approx. 10 crimes a year). The omission will likely exclude agencies in rural areas. 
+```{r subset_oris, warning = FALSE, message = FALSE}
+length(unique(ori_stats$originating_agency_identifier))
+ori_stats <- ori_stats %>%
+  # include those with > 100 crimes
+  # !!! this affects subsequent results !!!
+  filter(`Nb offenses` > 100) 
+length(unique(ori_stats$originating_agency_identifier))
+```
+
+
+```{r, include = FALSE}
+# number of police agencies
+length(unique(ori_stats$originating_agency_identifier))
+```
+
+
+```{r, include = FALSE}
+ori_stats %>% ggplot(aes(`Nb offenses`)) + geom_histogram() + xlim(0,5000)
+```
+
+
+Let's plot the gap in arrest rates between white and black offenders for all jurisdictions with at least 50 offenses with Black offenders and 50 offenses with White offenders.
+```{r gap_arrest_rate_plot, warning = FALSE, message = FALSE, fig.height = 7, fig.width = 7}
+# gap in arrest rates by police agency -- order states
+state_gap <- df %>% ungroup %>%
+  group_by(state_abbv) %>% 
+  summarise(y_diff = mean(y[race_of_offender=='White'])-mean(y[race_of_offender=='Black']))
+
+p <- ori_stats %>%
+  filter(`Nb black offenders`>50 & `Nb white offenders`>50) %>%
+  ggplot(aes(factor(`State`, levels = states_order), `Diff. arrest rate white-black`)) + 
+  geom_boxplot() + 
+  theme_bw() + 
+  ylab(expression(atop('Difference in arrest rates between', 'white and black offenders'))) + 
+  xlab('State code') + 
+  geom_hline(yintercept=0, linetype = 'dashed') + 
+  geom_point(data=state_gap, aes(state_abbv, y_diff), shape = 8, size = 5, col = 'forestgreen') + 
+  ylim(-0.15,0.21) + 
+  theme(axis.text.x = 
+          element_text(colour = country_list_color))
+p
+```
+
+
+```{r gap_arrest_rate_plot_save, include = FALSE}
+p + theme(text = element_text(size=40), axis.text = element_text(size = 30))
+ggsave(width = 20, height = 15, here('figures', paste0('Arrest_rate_by_pol_agency_', offense, '2.pdf')))
+p  + 
+  theme(text = element_text(size=25), axis.text = element_text(size = 25))
+ggsave(width = 20, height = 8, here('figures', paste0('Arrest_rate_by_pol_agency_', offense, '.pdf')))
+```
+
+
+Let's then focus on the relationship that we observed for large cities. 
+We compute some correlations between the share of black offenders in the police agency and other characteristics of the agency.
+
+```{r cor_off_crimecapita}
+cor.test(ori_stats$`% offenders that is black`, ori_stats$`Crime per capita`)
+```
+
+
+```{r cor_off_officerrate}
+cor.test(ori_stats$`% offenders that is black`, ori_stats$`Officer rate`)
+```
+
+```{r cor_off_popserved}
+cor.test(ori_stats$`% offenders that is black`, ori_stats$`Population served`)
+```
+
+```{r cor_off_officerperinc}
+cor.test(ori_stats$`% offenders that is black`, ori_stats$`Total officers`/ori_stats$`Nb offenses`)
+```
+
+```{r cor_off_arrestrate}
+cor.test(ori_stats$`% offenders that is black`, ori_stats$`Arrest rate`)
+```
+
+```{r additional_checks, include = FALSE}
+rq(ori_stats$`Crime per capita` ~ ori_stats$`% offenders that is black`) %>% tidy()
+rq(ori_stats$`Officer rate` ~ ori_stats$`% offenders that is black`) %>% tidy()
+rq(ori_stats$`Population served` ~ ori_stats$`% offenders that is black`) %>% tidy()
+rq(ori_stats$`Total officers`/ori_stats$`Nb offenses` ~ ori_stats$`% offenders that is black`) %>% tidy()
+rq(ori_stats$`Arrest rate` ~ ori_stats$`% offenders that is black`) %>% tidy()
+```
+
+We now plot the percentage of black offenders as a function of the arrest rate in the police agency.
+```{r arrest_rate_vs_black_prop, warning = FALSE, message = FALSE, fig.height = 10, fig.width = 10}
+p <- ori_stats %>% ungroup %>%
+  pivot_longer(cols = c(`Nb white offenders`, `Nb black offenders`), 
+               names_to = 'Race of offenders', 
+               values_to = 'Nb offenders') %>%
+  mutate(`Arrest rate binned` = floor(pmin(`Arrest rate`,0.99)*10)/10) %>%
+  group_by(`State`, `Race of offenders`, `Arrest rate binned`) %>%
+  summarise(`Total nb offenders` = sum(`Nb offenders`)) %>% 
+  mutate(`% offenders` = `Total nb offenders`/sum(`Total nb offenders`)) %>%
+  ggplot(aes(`Arrest rate binned`, `% offenders`, fill = `Race of offenders`)) + 
+  geom_col(position = position_dodge2()) + theme_bw() + 
+  xlab('Arrest rate in police agency') + 
+  facet_wrap( ~ `State`, ncol = 2) + 
+  ylab('Density') + 
+  scale_fill_manual('Race of offender', 
+                    values = c('grey60', "#E69F00"), 
+                    labels = c('Black', 'White')) + 
+  scale_x_continuous(breaks = seq(0,.9,by=0.1), 
+                     labels = paste0(seq(0,90,by=10), '-', seq(10,100,by=10), '%'))
+
+p #+ theme(plot.title = element_text(size=40), axis.title = element_text(size=20))
+```
+
+```{r arrest_rate_vs_black_prop_save, include = FALSE}
+p + theme(plot.title = element_text(size=40), axis.title = element_text(size=20))
+ggsave(height = 20, width = 14, 
+       here('figures', paste0('Distribution_by_arrest_rate_', offense, '.pdf')))
+```
+
+
+```{r pop_served_vs_officer_rate, include = FALSE, warning = FALSE, message = FALSE}
+ori_stats %>%
+  ggplot(aes(`Population served`, `Officer rate`)) + geom_point() + 
+  xlim(0,30000) + ylim(0,50) + theme_bw() + 
+  xlab('Population served by police agency') + 
+  ylab('Officers per 1000 capita in police agency')
+cor.test(ori_stats$`Population served`, ori_stats$`Officer rate`)
+```
+
+```{r black_pop_vs_arrestrate, include = FALSE, fig.width = 7, fig.height = 10}
+# difference in arrest rates as a function on black pop
+ori_stats %>% ggplot(aes(`% offenders that is black`, `Diff. arrest rate white-black`)) +
+  geom_point() + ylim(-1,1) + 
+  ylab('Difference in arrest rates between White and Black offenders') + 
+  xlab('% offenders that are Black in police agency')
+```
+
