@@ -129,7 +129,7 @@ order_terms <- intersect(c(
   'is_offender_male', 'age_of_offender',
   'is_offender_stranger', 'is_minor_injury', 'is_serious_injury',
   'is_multiple_offense',
-  'frac_black_off', 'officer_per_1000capita', 'offense_per_1000capita'), 
+  'frac_black_off', 'officer_per_1000capita', 'population_served'), 
   est_rwgt$term_rwgt) %>% sapply(., rename_vars)
 
 # horizontal line at 0
